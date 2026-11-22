@@ -5,12 +5,14 @@
 # For each project this resolves the latest GitHub release tag, then pulls
 # and saves its Docker image(s), Helm chart(s), release notes, and source code
 # tarball. It also pulls the cappctl image and downloads the cappctl CLI
-# binaries (both published as part of the capp-backend release).
+# binaries (both published as part of the capp-backend release). Finally, the
+# whole output directory is packed into a single zip file next to it
+# (<output-dir>.zip).
 #
 # Usage:
 #   ./pull-releases.sh [-o|--output-dir DIR]
 #
-# Requires: curl, docker, helm, jq
+# Requires: curl, docker, helm, jq, zip
 #
 # Uses the unauthenticated GitHub REST API (60 req/hr limit). Set GITHUB_TOKEN
 # to raise that limit if needed.
@@ -25,7 +27,8 @@ Usage: $(basename "$0") [-o|--output-dir DIR]
 
 Pulls the latest Docker images, Helm charts, release notes, source code
 tarballs, and cappctl CLI binaries for all capp projects (capp-backend,
-capp-mcp, cappctl, capp-frontend, container-app-operator, capp-monitoring).
+capp-mcp, cappctl, capp-frontend, container-app-operator, capp-monitoring),
+then packs everything into a single zip file (<output-dir>.zip).
 
 Options:
   -o, --output-dir DIR   Directory to save artifacts into (default: ./capp-releases)
@@ -51,7 +54,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for cmd in curl docker helm jq; do
+for cmd in curl docker helm jq zip; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: required command '$cmd' not found in PATH" >&2
     exit 1
@@ -196,6 +199,20 @@ pull_source "capp-monitoring" "$MONITORING_TAG"
 pull_image "${GHCR_REGISTRY}/capp-benchmark-runner:${MONITORING_TAG}" "capp-benchmark-runner" "$MONITORING_TAG"
 pull_chart "capp-monitoring" "$MONITORING_TAG"
 
+# ── zip the whole release ────────────────────────────────────────────────────
+# Strip trailing slashes so "dir/" zips as "dir.zip" rather than "dir/.zip".
+RELEASE_DIR="${OUTPUT_DIR%/}"
+RELEASE_PARENT="$(cd "$(dirname "$RELEASE_DIR")" && pwd)"
+RELEASE_NAME="$(basename "$RELEASE_DIR")"
+ZIP_FILE="${RELEASE_PARENT}/${RELEASE_NAME}.zip"
+
+log "Zipping ${RELEASE_DIR} into ${ZIP_FILE}"
+# Remove any previous zip so stale files from an older run don't linger in it.
+rm -f "$ZIP_FILE"
+# Zip from the parent dir so the archive has a single top-level folder.
+(cd "$RELEASE_PARENT" && zip -r -q "$ZIP_FILE" "$RELEASE_NAME")
+
 log "Done. Artifacts saved under ${OUTPUT_DIR}"
+log "Release archive: ${ZIP_FILE}"
 log "Resolved versions:"
 cat "$VERSIONS_FILE"
