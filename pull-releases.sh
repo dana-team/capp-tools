@@ -201,9 +201,16 @@ pull_image "${GHCR_REGISTRY}/cappctl:${BACKEND_TAG}" "cappctl" "$BACKEND_TAG"
 
 log "Downloading cappctl CLI binaries (${BACKEND_TAG})..."
 CAPPCTL_BASE_URL="https://github.com/${GITHUB_ORG}/capp-backend/releases/download/${BACKEND_TAG}"
-curl -fsSL -o "${CAPPCTL_DIR}/cappctl-linux-amd64" "${CAPPCTL_BASE_URL}/cappctl-linux-amd64"
-chmod +x "${CAPPCTL_DIR}/cappctl-linux-amd64"
-curl -fsSL -o "${CAPPCTL_DIR}/cappctl-windows-amd64.exe" "${CAPPCTL_BASE_URL}/cappctl-windows-amd64.exe"
+MISSING_ASSETS=()
+for asset in cappctl-linux-amd64 cappctl-windows-amd64.exe; do
+  if curl -fsSL -o "${CAPPCTL_DIR}/${asset}" "${CAPPCTL_BASE_URL}/${asset}"; then
+    [[ "$asset" == *.exe ]] || chmod +x "${CAPPCTL_DIR}/${asset}"
+  else
+    rm -f "${CAPPCTL_DIR}/${asset}"
+    echo "WARNING: ${asset} is not attached to capp-backend ${BACKEND_TAG} (${CAPPCTL_BASE_URL}/${asset}); skipping" >&2
+    MISSING_ASSETS+=("$asset")
+  fi
+done
 
 # ── capp-frontend ─────────────────────────────────────────────────────────────
 log "Resolving capp-frontend latest release..."
@@ -255,3 +262,6 @@ log "Done. Artifacts saved under ${OUTPUT_DIR}"
 log "Release archive: ${ZIP_FILE}"
 log "Resolved versions:"
 cat "$VERSIONS_FILE"
+if [[ ${#MISSING_ASSETS[@]} -gt 0 ]]; then
+  echo "WARNING: missing cappctl binaries for capp-backend ${BACKEND_TAG}: ${MISSING_ASSETS[*]}" >&2
+fi
