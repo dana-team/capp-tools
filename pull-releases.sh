@@ -3,16 +3,19 @@
 # pull-releases.sh — fetch the latest release artifacts for all capp projects.
 #
 # For each project this resolves the latest GitHub release tag, then pulls
-# and saves its Docker image(s), Helm chart(s), release notes, and source code
+# and saves its container image(s), Helm chart(s), release notes, and source code
 # tarball. It also pulls the cappctl image and downloads the cappctl CLI
 # binaries (both published as part of the capp-backend release). Finally, the
 # whole output directory is packed into a single zip file next to it
 # (<output-dir>.zip).
 #
 # Usage:
-#   ./pull-releases.sh [-o|--output-dir DIR]
+#   ./pull-releases.sh [-o|--output-dir DIR] [-e|--engine docker|podman]
 #
-# Requires: curl, docker, helm, jq, zip
+# Requires: curl, docker or podman, helm, jq, zip
+#
+# The container engine defaults to $CONTAINER_ENGINE if set, otherwise docker
+# if it is installed, otherwise podman.
 #
 # Uses the unauthenticated GitHub REST API (60 req/hr limit). Set GITHUB_TOKEN
 # to raise that limit if needed.
@@ -20,18 +23,22 @@
 set -euo pipefail
 
 OUTPUT_DIR="./capp-releases"
+ENGINE="${CONTAINER_ENGINE:-}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [-o|--output-dir DIR]
+Usage: $(basename "$0") [-o|--output-dir DIR] [-e|--engine docker|podman]
 
-Pulls the latest Docker images, Helm charts, release notes, source code
+Pulls the latest container images, Helm charts, release notes, source code
 tarballs, and cappctl CLI binaries for all capp projects (capp-backend,
 capp-mcp, cappctl, capp-frontend, container-app-operator, capp-monitoring),
 then packs everything into a single zip file (<output-dir>.zip).
 
 Options:
   -o, --output-dir DIR   Directory to save artifacts into (default: ./capp-releases)
+  -e, --engine ENGINE    Container engine to use: docker or podman
+                         (default: \$CONTAINER_ENGINE, else docker if
+                         installed, else podman)
   -h, --help              Show this help message
 EOF
 }
@@ -40,6 +47,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -o|--output-dir)
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    -e|--engine)
+      ENGINE="$2"
       shift 2
       ;;
     -h|--help)
@@ -54,7 +65,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for cmd in curl docker helm jq zip; do
+if [[ -z "$ENGINE" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    ENGINE="docker"
+  elif command -v podman >/dev/null 2>&1; then
+    ENGINE="podman"
+  else
+    echo "Error: neither 'docker' nor 'podman' found in PATH" >&2
+    exit 1
+  fi
+fi
+
+case "$ENGINE" in
+  docker|podman) ;;
+  *)
+    echo "Error: unsupported container engine '$ENGINE' (use docker or podman)" >&2
+    exit 1
+    ;;
+esac
+
+for cmd in curl "$ENGINE" helm jq zip; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: required command '$cmd' not found in PATH" >&2
     exit 1
@@ -71,6 +101,8 @@ CAPPCTL_DIR="$OUTPUT_DIR/cappctl"
 NOTES_DIR="$OUTPUT_DIR/release-notes"
 SOURCE_DIR="$OUTPUT_DIR/source"
 VERSIONS_FILE="$OUTPUT_DIR/versions.txt"
+
+log "Using container engine: ${ENGINE}"
 
 mkdir -p "$IMAGES_DIR" "$HELM_DIR" "$CAPPCTL_DIR" "$NOTES_DIR" "$SOURCE_DIR"
 : > "$VERSIONS_FILE"
@@ -101,14 +133,21 @@ latest_tag() {
   echo "$tag"
 }
 
-# pull_image <image_ref> <name> <tag> — docker pull + save to a tar
+# pull_image <image_ref> <name> <tag> — pull with $ENGINE + save to a tar
+# (podman saves in docker-archive format so the tar loads with either engine)
 pull_image() {
   local image_ref="$1" name="$2" tag="$3"
-  log "Pulling image ${image_ref}"
-  docker pull "$image_ref"
+  log "Pulling image ${image_ref} (${ENGINE})"
+  "$ENGINE" pull "$image_ref"
   local out="${IMAGES_DIR}/${name}-${tag}.tar"
   log "Saving image to ${out}"
-  docker save "$image_ref" -o "$out"
+  if [[ "$ENGINE" == "podman" ]]; then
+    # Remove any stale tar first: podman refuses to overwrite in some versions.
+    rm -f "$out"
+    podman save --format docker-archive -o "$out" "$image_ref"
+  else
+    docker save "$image_ref" -o "$out"
+  fi
 }
 
 # pull_chart <chart_name> <tag> — helm pull an OCI chart into HELM_DIR
