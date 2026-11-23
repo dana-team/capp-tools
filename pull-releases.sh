@@ -102,14 +102,14 @@ NOTES_DIR="$OUTPUT_DIR/release-notes"
 SOURCE_DIR="$OUTPUT_DIR/source"
 VERSIONS_FILE="$OUTPUT_DIR/versions.txt"
 
-log "Using container engine: ${ENGINE}"
-
 mkdir -p "$IMAGES_DIR" "$HELM_DIR" "$CAPPCTL_DIR" "$NOTES_DIR" "$SOURCE_DIR"
 : > "$VERSIONS_FILE"
 
 log() {
   echo ">> $*"
 }
+
+log "Using container engine: ${ENGINE}"
 
 # github_api <path> — GET https://api.github.com/<path>, using GITHUB_TOKEN if set
 github_api() {
